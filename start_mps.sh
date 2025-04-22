@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# Usage: ./start_mps.sh 0 2 3
+# Usage: ./start_mps.sh 0 2 3 5
 # Starts an MPS daemon on each GPU ID provided
 
 for GPU_ID in "$@"; do
