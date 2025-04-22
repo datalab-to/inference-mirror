@@ -1,4 +1,4 @@
-# Datalab Inference
+# Datalab Inference Service
 
 Containerized inference service for [marker](https://github.com/VikParuchuri/marker). 
 
@@ -32,6 +32,7 @@ Here are a few recommended configurations that have been tested on a few differe
 NUM_WORKERS_PER_GPU=7
 100 PDFs; 7930 pages   ->    284.8711025714874s (27.837 pages/s)
 ```
+
 
 
 # API Description and Endpoints
