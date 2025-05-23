@@ -20,9 +20,10 @@ Before starting the inference service, enable NVIDIA MPS Server. This speeds up 
 # For example, on a system with 3 GPUs - sudo ./start_mps.sh 0 1 2 
 sudo ./start_mps.sh <GPU_ID_LIST>
 ```
-A few environment variables must be set in a `.env` file, as detailed in the `.env.example` file. 
+A few environment variables must be set in a `.env` file, as detailed in the `.env.example` file. Copy over the defaults and modify them as required.
 Finally, start the service using
 ```bash
+cp .env.example .env
 docker compose up
 ```
 
