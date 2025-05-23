@@ -17,7 +17,8 @@ python generate_compose.py $FNAME --gpus $NUM_GPUS --workers_per_gpu $NUM_WORKER
 A sample docker compose file has been provided in `docker-compose.yaml`
 Before starting the inference service, enable NVIDIA MPS Server. This speeds up multiple processes sharing a single GPU. You may require `sudo` access to run.
 ```bash
-sudo ./start_mps.sh
+# For example, on a system with 3 GPUs - sudo ./start_mps.sh 0 1 2 
+sudo ./start_mps.sh <GPU_ID_LIST>
 ```
 A few environment variables must be set in a `.env` file, as detailed in the `.env.example` file. 
 Finally, start the service using
