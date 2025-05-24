@@ -12,8 +12,5 @@ for GPU_ID in "$@"; do
   mkdir -p "$PIPE_DIR" "$LOG_DIR"
   chmod 777 "$PIPE_DIR" "$LOG_DIR"
 
-  CUDA_VISIBLE_DEVICES=$GPU_ID \
-  CUDA_MPS_PIPE_DIRECTORY=$PIPE_DIR \
-  CUDA_MPS_LOG_DIRECTORY=$LOG_DIR \
-  nvidia-cuda-mps-control -d
+  sudo env CUDA_VISIBLE_DEVICES=$GPU_ID CUDA_MPS_PIPE_DIRECTORY=$PIPE_DIR CUDA_MPS_LOG_DIRECTORY=$LOG_DIR nvidia-cuda-mps-control -d
 done
