@@ -10,6 +10,16 @@ Containerized inference service for [marker](https://github.com/VikParuchuri/mar
 - Retrieve file status or download results
 
 # Setup
+
+## Single container
+
+```bash
+export IMAGE_TAG=us-central1-docker.pkg.dev/inference-build/inference-images/combined:latest
+docker pull $IMAGE_TAG
+docker run --gpus device=0 -p 8000:8000 $IMAGE_TAG # Container can only handle one GPU
+```
+
+## Multiple containers (server/1 worker per GPU)
 Generate the docker compose file using
 ```bash
 python generate_compose.py $FNAME --gpus $NUM_GPUS --workers_per_gpu $NUM_WORKERS_PER_GPU
@@ -126,4 +136,12 @@ import requests
 params = {"file_id": "your-file-id", "download": True}
 res = requests.get("http://localhost:8000/marker/results", params=params)
 print(res.json())
+```
+
+# Integration Testing
+
+You can run a small performance test with this script:
+
+```bash
+CUDA_VISIBLE_DEVICES=0 python integration_test.py --pdf_dir PATH/TO/PDFs --build
 ```
