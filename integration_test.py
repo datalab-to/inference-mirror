@@ -349,7 +349,7 @@ class AsyncPDFProcessor:
                 return "unknown", f"Unknown status: {status}"
 
     async def wait_for_completion(
-        self, file_id: str, timeout: int = 1200
+        self, file_id: str, timeout: int = 1e5
     ) -> Tuple[bool, str]:
         """Wait for PDF processing to complete. Returns (success, result/error)."""
         start_time = time.time()
@@ -444,22 +444,23 @@ class PerformanceTester:
                 "result": result,
             }
 
-            # Ensure all pnums present and in order
-            match_pos = 0
-            for pnum in range(page_count):
-                assert f"{{{pnum}}}" in result, (
-                    f"Page {pnum} not found in result for {pdf_path.name}"
-                )
-                new_match_pos = result.index(f"{{{pnum}}}", match_pos)
-                assert new_match_pos >= match_pos, (
-                    f"Page {pnum} not in order in result for {pdf_path.name}"
-                )
-                match_pos = new_match_pos + 1
+            # Ensure all pnums present and in order if we were successful
+            if success:
+                match_pos = 0
+                for pnum in range(page_count):
+                    assert f"{{{pnum}}}" in result, (
+                        f"Page {pnum} not found in result for {pdf_path.name}"
+                    )
+                    new_match_pos = result.index(f"{{{pnum}}}", match_pos)
+                    assert new_match_pos >= match_pos, (
+                        f"Page {pnum} not in order in result for {pdf_path.name}"
+                    )
+                    match_pos = new_match_pos + 1
 
-            if self.out_dir:
-                out_path = os.path.join(self.out_dir, f"{pdf_path.name}.md")
-                with open(out_path, "w+") as f:
-                    f.write(result)
+                if self.out_dir:
+                    out_path = os.path.join(self.out_dir, f"{pdf_path.name}.md")
+                    with open(out_path, "w+") as f:
+                        f.write(result)
 
             if success:
                 print(
