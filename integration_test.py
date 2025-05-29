@@ -678,7 +678,14 @@ def main(
     container_manager = None
 
     try:
-        container_manager = DockerContainerManager()
+        if build:
+            image_name = "datalab-inference-combined"
+        else:
+            image_name = (
+                "us-central1-docker.pkg.dev/inference-build/inference-images/combined"
+            )
+
+        container_manager = DockerContainerManager(image_name=image_name)
 
         # Build image if requested
         if build:
