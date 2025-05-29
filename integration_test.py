@@ -6,6 +6,7 @@ Submits files in parallel to saturate workers.
 """
 
 import os
+import shutil
 import sys
 import time
 import asyncio
@@ -57,7 +58,7 @@ class DockerContainerManager:
             print(f"✗ Failed to build Docker image: {e}")
             return False
 
-    def start_container(self, port: int = 8000) -> bool:
+    def start_container(self, port: int = 8000, gpu_idx: int = 0) -> bool:
         """Start the Docker container."""
         print(f"Starting container: {self.container_name}")
         try:
@@ -75,7 +76,9 @@ class DockerContainerManager:
                 name=self.container_name,
                 ports={"8000/tcp": port},
                 device_requests=[
-                    docker.types.DeviceRequest(device_ids=["0"], capabilities=[["gpu"]])
+                    docker.types.DeviceRequest(
+                        device_ids=[str(gpu_idx)], capabilities=[["gpu"]]
+                    )
                 ],
                 detach=True,
             )
@@ -127,19 +130,20 @@ class DockerContainerManager:
 class ResourceMonitor:
     """Monitors CPU and GPU utilization during testing."""
 
-    def __init__(self, container_name: str = "test-inference"):
+    def __init__(self, container_name: str = "test-inference", gpu_idx: int = 0):
         self.container_name = container_name
         self.monitoring = False
         self.cpu_samples = []
         self.gpu_samples = []
         self.monitor_thread = None
+        self.gpu_idx = gpu_idx
 
         # Initialize NVIDIA ML if available
         self.gpu_available = False
         if NVIDIA_ML_AVAILABLE:
             try:
                 pynvml.nvmlInit()
-                self.gpu_handle = pynvml.nvmlDeviceGetHandleByIndex(0)
+                self.gpu_handle = pynvml.nvmlDeviceGetHandleByIndex(gpu_idx)
                 self.gpu_max_power = pynvml.nvmlDeviceGetMaxPcieLinkGeneration(
                     self.gpu_handle
                 )
@@ -328,14 +332,15 @@ class AsyncPDFProcessor:
     async def check_status(self, file_id: str) -> Tuple[str, str]:
         """Check the status of a processing job. Returns (status, result/error)."""
         async with self.session.get(
-            f"{self.base_url}/marker/results", params={"file_id": file_id}
+            f"{self.base_url}/marker/results",
+            params={"file_id": file_id, "download": "true"},
         ) as response:
             response.raise_for_status()
             result = await response.json()
             status = result.get("status")
 
             if status == "done":
-                return "done", "completed"
+                return "done", result.get("result")
             elif status == "failed":
                 return "failed", result.get("error", "Unknown error")
             elif status == "processing":
@@ -379,6 +384,7 @@ class PerformanceTester:
         max_concurrent: int = 10,
         max_files: int | None = None,
         format_lines: bool = False,
+        out_dir: str = "",
     ):
         self.pdf_dir = Path(pdf_dir)
         self.base_url = base_url
@@ -386,9 +392,8 @@ class PerformanceTester:
         self.results: List[Dict] = []
         self.results_lock = threading.Lock()
         self.max_files = max_files
-        self.config = {
-            "format_lines": format_lines,
-        }
+        self.config = {"format_lines": format_lines, "paginate_output": True}
+        self.out_dir = out_dir
 
     def find_pdf_files(self) -> List[Path]:
         """Find all PDF files in the directory."""
@@ -438,6 +443,23 @@ class PerformanceTester:
                 "success": success,
                 "result": result,
             }
+
+            # Ensure all pnums present and in order
+            match_pos = 0
+            for pnum in range(page_count):
+                assert f"{{{pnum}}}" in result, (
+                    f"Page {pnum} not found in result for {pdf_path.name}"
+                )
+                new_match_pos = result.index(f"{{{pnum}}}", match_pos)
+                assert new_match_pos >= match_pos, (
+                    f"Page {pnum} not in order in result for {pdf_path.name}"
+                )
+                match_pos = new_match_pos + 1
+
+            if self.out_dir:
+                out_path = os.path.join(self.out_dir, f"{pdf_path.name}.md")
+                with open(out_path, "w+") as f:
+                    f.write(result)
 
             if success:
                 print(
@@ -629,6 +651,8 @@ class PerformanceTester:
 @click.option(
     "--format_lines", is_flag=True, help="Format lines in the output (default: False)"
 )
+@click.option("--out_dir", type=str, default=None, help="Output directory for results")
+@click.option("--gpu_idx", type=int, default=0, help="GPU index to use (if applicable)")
 def main(
     pdf_dir: str,
     port: int,
@@ -636,11 +660,19 @@ def main(
     max_concurrent: int,
     max_files: int,
     format_lines: bool,
+    out_dir: str = "",
+    gpu_idx: int = 0,
 ):
     # Verify PDF directory exists
     if not os.path.isdir(pdf_dir):
         print(f"Error: Directory {pdf_dir} does not exist")
         sys.exit(1)
+
+    # Clear existing files in out_dir
+    if out_dir:
+        if os.path.exists(out_dir):
+            shutil.rmtree(out_dir)
+        os.makedirs(out_dir)
 
     container_manager = None
 
@@ -653,16 +685,21 @@ def main(
                 sys.exit(1)
 
         # Start container
-        if not container_manager.start_container(port):
+        if not container_manager.start_container(port, gpu_idx):
             sys.exit(1)
 
         # Start resource monitoring
-        monitor = ResourceMonitor(container_manager.container_name)
+        monitor = ResourceMonitor(container_manager.container_name, gpu_idx)
         monitor.start_monitoring()
 
         # Run performance tests
         tester = PerformanceTester(
-            pdf_dir, f"http://localhost:{port}", max_concurrent, max_files, format_lines
+            pdf_dir,
+            f"http://localhost:{port}",
+            max_concurrent,
+            max_files,
+            format_lines,
+            out_dir,
         )
         start_time = time.time()
         tester.run_tests()
