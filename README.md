@@ -41,11 +41,10 @@ docker compose up
 Here are a few recommended configurations that have been tested on a few different GPUs, to help set the number of workers and batch sizes
 - **1xH100 GPU 80GB** (30 CPUs and 200GB RAM)
 ```
-NUM_WORKERS_PER_GPU=8
 10 PDFs; 840 pages   ->    29.42s (28.552 pages/s)     
 
 with `format_lines` enabled
-10 PDFs; 840 pages   ->    109.42s (7.677 pages/s)
+10 PDFs; 840 pages   ->    109.42s (9.31 pages/s)
 ```
 
 # API Description and Endpoints
@@ -135,6 +134,27 @@ import requests
 
 params = {"file_id": "your-file-id", "download": True}
 res = requests.get("http://localhost:8000/marker/results", params=params)
+print(res.json())
+```
+
+## `POST /marker/clear`
+
+**Description:**
+Clear the results of a file that has been processed.
+
+**Form Data:**
+- `file_id` (str, required): The ID of the file to clear.
+
+**Response:**
+```json
+{ "status": "cleared", "file_id": "<file_id>" }
+```
+
+**Python Example:**
+```python
+import requests
+files = {'file_id': 'your-file-id'}
+res = requests.post("http://localhost:8000/marker/clear", files=files)
 print(res.json())
 ```
 

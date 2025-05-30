@@ -20,6 +20,7 @@ import docker
 import threading
 import click
 import psutil
+import requests
 
 try:
     import pynvml
@@ -329,7 +330,7 @@ class AsyncPDFProcessor:
                 result = await response.json()
                 return result["file_id"]
 
-    async def check_status(self, file_id: str) -> Tuple[str, str]:
+    async def check_status(self, file_id: str) -> Tuple[str, dict]:
         """Check the status of a processing job. Returns (status, result/error)."""
         async with self.session.get(
             f"{self.base_url}/marker/results",
@@ -340,17 +341,29 @@ class AsyncPDFProcessor:
             status = result.get("status")
 
             if status == "done":
-                return "done", result.get("result")
+                return "done", result
             elif status == "failed":
-                return "failed", result.get("error", "Unknown error")
+                return "failed", result
             elif status == "processing":
-                return "processing", ""
+                return "processing", {}
             else:
-                return "unknown", f"Unknown status: {status}"
+                return "unknown", {"status": f"Unknown status: {status}"}
+
+    async def clear_file(self, file_id: str) -> bool:
+        """Clear a processed file from the server."""
+        try:
+            async with self.session.post(
+                f"{self.base_url}/marker/clear", params={"file_id": file_id}
+            ) as response:
+                response.raise_for_status()
+                return True
+        except Exception as e:
+            print(f"Warning: Could not clear file {file_id}: {e}")
+            return False
 
     async def wait_for_completion(
         self, file_id: str, timeout: int = 1e5
-    ) -> Tuple[bool, str]:
+    ) -> Tuple[bool, dict]:
         """Wait for PDF processing to complete. Returns (success, result/error)."""
         start_time = time.time()
 
@@ -371,7 +384,7 @@ class AsyncPDFProcessor:
             except Exception as e:
                 return False, f"Request failed: {e}"
 
-        return False, "Timeout waiting for completion"
+        return False, {"status": "Timeout waiting for completion"}
 
 
 class PerformanceTester:
@@ -431,6 +444,8 @@ class PerformanceTester:
             pages_per_second = (
                 page_count / processing_time if processing_time > 0 else 0
             )
+            output_md = result.get("result", result.get("error"))
+            worker_info = result.get("worker_info", {})
 
             test_result = {
                 "filename": pdf_path.name,
@@ -441,26 +456,29 @@ class PerformanceTester:
                 "total_time": total_time,
                 "pages_per_second": pages_per_second,
                 "success": success,
-                "result": result,
+                "result": output_md,
+                "worker_pages": worker_info.get("pages", 0),
+                "worker_time": worker_info.get("worker_time", 1),
             }
 
             # Ensure all pnums present and in order if we were successful
+            await processor.clear_file(file_id)  # Clear file after processing
             if success:
                 match_pos = 0
                 for pnum in range(page_count):
-                    assert f"{{{pnum}}}" in result, (
-                        f"Page {pnum} not found in result for {pdf_path.name}"
+                    assert f"{{{pnum}}}" in output_md, (
+                        f"Page {pnum} not found in output for {pdf_path.name}"
                     )
-                    new_match_pos = result.index(f"{{{pnum}}}", match_pos)
+                    new_match_pos = output_md.index(f"{{{pnum}}}", match_pos)
                     assert new_match_pos >= match_pos, (
-                        f"Page {pnum} not in order in result for {pdf_path.name}"
+                        f"Page {pnum} not in order in output for {pdf_path.name}"
                     )
                     match_pos = new_match_pos + 1
 
                 if self.out_dir:
                     out_path = os.path.join(self.out_dir, f"{pdf_path.name}.md")
                     with open(out_path, "w+") as f:
-                        f.write(result)
+                        f.write(output_md)
 
             if success:
                 print(
@@ -499,6 +517,7 @@ class PerformanceTester:
         print(f"Found {len(pdf_files)} PDF files to test")
         print(f"Using max concurrency: {self.max_concurrent}")
 
+        self.start_time = time.time()
         async with AsyncPDFProcessor(self.base_url) as processor:
             # Create semaphore to limit concurrency
             semaphore = asyncio.Semaphore(self.max_concurrent)
@@ -511,7 +530,13 @@ class PerformanceTester:
             tasks = [process_with_semaphore(pdf_file) for pdf_file in pdf_files]
             self.results = await asyncio.gather(*tasks)
 
+        self.end_time = time.time()
         return self.results
+
+    def check_server_status(self):
+        response = requests.get(f"{self.base_url}/status")
+        response.raise_for_status()
+        return response.json()
 
     def run_tests(self) -> List[Dict]:
         """Run tests synchronously (wrapper for async version)."""
@@ -523,12 +548,20 @@ class PerformanceTester:
             print("\nNo test results to summarize")
             return
 
+        container_status = self.check_server_status()
+        gpu_worker_count = container_status.get("num_workers_running", 0)
+
         successful_tests = [r for r in self.results if r["success"]]
         failed_tests = [r for r in self.results if not r["success"]]
 
         total_pages = sum(r["page_count"] for r in successful_tests)
         total_processing_time = sum(r["processing_time"] for r in successful_tests)
-        total_wall_time = max((r["total_time"] for r in self.results), default=0)
+        total_wall_time = (
+            self.end_time - self.start_time if hasattr(self, "end_time") else 0
+        )
+
+        total_worker_pages = sum(r["worker_pages"] for r in successful_tests)
+        total_worker_time = sum(r["worker_time"] for r in successful_tests)
 
         print("\n" + "=" * 70)
         print("PERFORMANCE TEST SUMMARY")
@@ -546,8 +579,10 @@ class PerformanceTester:
                 f"Throughput (pages/sec): {total_pages / total_wall_time if total_wall_time > 0 else 0:.2f}"
             )
             print(
-                f"Processing efficiency: {total_processing_time / total_wall_time if total_wall_time > 0 else 0:.2f}"
+                f"Worker calculated throughput (pages/sec): {(total_worker_pages / total_worker_time) * gpu_worker_count if total_worker_time > 0 else 0:.2f}"
             )
+            print(f"Total worker time (sec): {total_worker_time:.2f}")
+            print(f"Total worker pages: {total_worker_pages}")
 
             avg_pages_per_second = sum(
                 r["pages_per_second"] for r in successful_tests
@@ -654,6 +689,12 @@ class PerformanceTester:
 )
 @click.option("--out_dir", type=str, default=None, help="Output directory for results")
 @click.option("--gpu_idx", type=int, default=0, help="GPU index to use (if applicable)")
+@click.option(
+    "--image_name",
+    type=str,
+    default="us-central1-docker.pkg.dev/inference-build/inference-images/combined:latest",
+    help="Docker image name to use",
+)
 def main(
     pdf_dir: str,
     port: int,
@@ -661,8 +702,9 @@ def main(
     max_concurrent: int,
     max_files: int,
     format_lines: bool,
-    out_dir: str = "",
-    gpu_idx: int = 0,
+    out_dir: str,
+    gpu_idx: int,
+    image_name: str,
 ):
     # Verify PDF directory exists
     if not os.path.isdir(pdf_dir):
@@ -680,10 +722,6 @@ def main(
     try:
         if build:
             image_name = "datalab-inference-combined"
-        else:
-            image_name = (
-                "us-central1-docker.pkg.dev/inference-build/inference-images/combined"
-            )
 
         container_manager = DockerContainerManager(image_name=image_name)
 
