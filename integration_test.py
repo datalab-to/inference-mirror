@@ -59,7 +59,9 @@ class DockerContainerManager:
             print(f"✗ Failed to build Docker image: {e}")
             return False
 
-    def start_container(self, port: int = 8000, gpu_idx: int = 0) -> bool:
+    def start_container(
+        self, port: int = 8000, gpu_idx: int = 0, cpu_mode: bool = False
+    ) -> bool:
         """Start the Docker container."""
         print(f"Starting container: {self.container_name}")
         try:
@@ -72,17 +74,32 @@ class DockerContainerManager:
                 pass
 
             # Start new container with GPU access
-            self.container = self.client.containers.run(
-                self.image_name,
-                name=self.container_name,
-                ports={"8000/tcp": port},
-                device_requests=[
+            kwargs = {
+                "name": self.container_name,
+                "ports": {"8000/tcp": port},
+                "detach": True,
+            }
+            if cpu_mode:
+                kwargs["environment"] = {
+                    "TORCH_NUM_THREADS": psutil.cpu_count(logical=False),
+                    "OPENBLAS_NUM_THREADS": 4,
+                    "OMP_NUM_THREADS": 4,
+                    "RECOGNITION_BATCH_SIZE": 16,
+                    "DETECTION_BATCH_SIZE": 4,
+                    "TABLE_REC_BATCH_SIZE": 6,
+                    "LAYOUT_BATCH_SIZE": 6,
+                    "OCR_ERROR_BATCH_SIZE": 6,
+                    "DETECTOR_POSTPROCESSING_CPU_WORKERS": 4,
+                    "CHUNK_SIZE": 6,
+                }
+            else:
+                kwargs["device_requests"] = [
                     docker.types.DeviceRequest(
                         device_ids=[str(gpu_idx)], capabilities=[["gpu"]]
                     )
-                ],
-                detach=True,
-            )
+                ]
+
+            self.container = self.client.containers.run(self.image_name, **kwargs)
 
             print(f"✓ Container started with ID: {self.container.id}")
 
@@ -353,7 +370,7 @@ class AsyncPDFProcessor:
         """Clear a processed file from the server."""
         try:
             async with self.session.post(
-                f"{self.base_url}/marker/clear", params={"file_id": file_id}
+                f"{self.base_url}/marker/clear", json={"file_id": file_id}
             ) as response:
                 response.raise_for_status()
                 return True
@@ -362,7 +379,7 @@ class AsyncPDFProcessor:
             return False
 
     async def wait_for_completion(
-        self, file_id: str, timeout: int = 1e5
+        self, file_id: str, timeout: int = 1e6
     ) -> Tuple[bool, dict]:
         """Wait for PDF processing to complete. Returns (success, result/error)."""
         start_time = time.time()
@@ -695,6 +712,11 @@ class PerformanceTester:
     default="us-central1-docker.pkg.dev/inference-build/inference-images/combined:latest",
     help="Docker image name to use",
 )
+@click.option(
+    "--cpu_mode",
+    is_flag=True,
+    help="Run in CPU mode (no GPU access, useful for debugging)",
+)
 def main(
     pdf_dir: str,
     port: int,
@@ -705,6 +727,7 @@ def main(
     out_dir: str,
     gpu_idx: int,
     image_name: str,
+    cpu_mode: bool = False,
 ):
     # Verify PDF directory exists
     if not os.path.isdir(pdf_dir):
@@ -731,7 +754,7 @@ def main(
                 sys.exit(1)
 
         # Start container
-        if not container_manager.start_container(port, gpu_idx):
+        if not container_manager.start_container(port, gpu_idx, cpu_mode):
             sys.exit(1)
 
         # Start resource monitoring

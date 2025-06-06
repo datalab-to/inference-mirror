@@ -28,7 +28,7 @@ services:
       DATA_DIR: /data
     restart: unless-stopped
   gpu0-worker:
-    image: us-central1-docker.pkg.dev/inference-build/inference-images/worker:latest
+    image: us-central1-docker.pkg.dev/inference-build/inference-images/combined:latest
     depends_on:
       rabbitmq:
         condition: service_healthy

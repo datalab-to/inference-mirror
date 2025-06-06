@@ -11,7 +11,7 @@ Containerized inference service for [marker](https://github.com/VikParuchuri/mar
 
 # Setup
 
-## Single container
+This will run a single container on a single GPU, and will run enough parallel marker workers to saturate the GPU.
 
 ```bash
 export IMAGE_TAG=us-central1-docker.pkg.dev/inference-build/inference-images/combined:latest
@@ -19,22 +19,29 @@ docker pull $IMAGE_TAG
 docker run --gpus device=0 -p 8000:8000 $IMAGE_TAG # Container can only handle one GPU
 ```
 
-## Multiple containers (server/1 worker per GPU)
-Generate the docker compose file using
-```bash
-python generate_compose.py $FNAME --gpus $NUM_GPUS --workers_per_gpu $NUM_WORKERS_PER_GPU
+## CPU
+
+If you want to run the combined container on CPU, you will need to set these environment variables when you run the Docker container (the variables must be set inside the container, and available to the entrypoint script):
+
+```json
+{
+    "TORCH_NUM_THREADS": "NUM_PHYSICAL_CORES", // Equal to psutil.cpu_count(logical=False)
+    "OPENBLAS_NUM_THREADS": 4,
+    "OMP_NUM_THREADS": 4,
+    "RECOGNITION_BATCH_SIZE": 16,
+    "DETECTION_BATCH_SIZE": 4,
+    "TABLE_REC_BATCH_SIZE": 6,
+    "LAYOUT_BATCH_SIZE": 6,
+    "OCR_ERROR_BATCH_SIZE": 6,
+    "DETECTOR_POSTPROCESSING_CPU_WORKERS": 4,
+    "CHUNK_SIZE": 6
+}
 ```
-A sample docker compose file has been provided in `docker-compose.yaml`
-Before starting the inference service, enable NVIDIA MPS Server. This speeds up multiple processes sharing a single GPU. You will be prompted for `sudo` access
+
+Then you just run the container without mounting a GPU:
+
 ```bash
-# For example, on a system with 3 GPUs - sudo ./start_mps.sh 0 1 2 
-./start_mps.sh <GPU_ID_LIST>
-```
-A few environment variables must be set in a `.env` file, as detailed in the `.env.example` file. Copy over the defaults and modify them as required.
-Finally, start the service using
-```bash
-cp .env.example .env
-docker compose up
+docker run -p 8000:8000 $IMAGE_TAG # Container can only handle one GPU
 ```
 
 # Recommended Configurations
@@ -142,7 +149,7 @@ print(res.json())
 **Description:**
 Clear the results of a file that has been processed.
 
-**Form Data:**
+**Data:**
 - `file_id` (str, required): The ID of the file to clear.
 
 **Response:**
@@ -153,8 +160,8 @@ Clear the results of a file that has been processed.
 **Python Example:**
 ```python
 import requests
-files = {'file_id': 'your-file-id'}
-res = requests.post("http://localhost:8000/marker/clear", files=files)
+data = {'file_id': 'your-file-id'}
+res = requests.post("http://localhost:8000/marker/clear", json=data)
 print(res.json())
 ```
 
