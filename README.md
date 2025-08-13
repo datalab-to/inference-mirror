@@ -50,7 +50,7 @@ Here are a few recommended configurations that have been tested on a few differe
 ```
 10 PDFs; 840 pages   ->    29.42s (28.552 pages/s)     
 
-with `format_lines` enabled
+with `force_ocr` enabled
 10 PDFs; 840 pages   ->    109.42s (9.31 pages/s)
 ```
 

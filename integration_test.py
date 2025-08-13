@@ -16,11 +16,12 @@ import json
 from pathlib import Path
 from typing import List, Dict, Tuple
 import pypdfium2
-import docker
 import threading
 import click
 import psutil
 import requests
+
+from docker_manager import DockerContainerManager
 
 try:
     import pynvml
@@ -28,121 +29,6 @@ try:
     NVIDIA_ML_AVAILABLE = True
 except ImportError:
     NVIDIA_ML_AVAILABLE = False
-
-
-class DockerContainerManager:
-    """Manages Docker container lifecycle using Docker Python API."""
-
-    def __init__(
-        self,
-        image_name: str = "datalab-inference-combined",
-        container_name: str = "test-inference",
-    ):
-        self.image_name = image_name
-        self.container_name = container_name
-        self.client = docker.from_env()
-        self.container = None
-
-    def build_image(self) -> bool:
-        """Build the Docker image."""
-        print(f"Building Docker image: {self.image_name}")
-        try:
-            self.client.images.build(
-                path=".",
-                dockerfile="Dockerfile.combined",
-                tag=self.image_name,
-                rm=True,
-            )
-            print("✓ Docker image built successfully")
-            return True
-        except docker.errors.BuildError as e:
-            print(f"✗ Failed to build Docker image: {e}")
-            return False
-
-    def start_container(
-        self, port: int = 8000, gpu_idx: int = 0, cpu_mode: bool = False
-    ) -> bool:
-        """Start the Docker container."""
-        print(f"Starting container: {self.container_name}")
-        try:
-            # Stop and remove existing container if it exists
-            try:
-                existing = self.client.containers.get(self.container_name)
-                existing.stop()
-                existing.remove()
-            except docker.errors.NotFound:
-                pass
-
-            # Start new container with GPU access
-            kwargs = {
-                "name": self.container_name,
-                "ports": {"8000/tcp": port},
-                "detach": True,
-            }
-            if cpu_mode:
-                kwargs["environment"] = {
-                    "TORCH_NUM_THREADS": psutil.cpu_count(logical=False),
-                    "OPENBLAS_NUM_THREADS": 4,
-                    "OMP_NUM_THREADS": 4,
-                    "RECOGNITION_BATCH_SIZE": 16,
-                    "DETECTION_BATCH_SIZE": 4,
-                    "TABLE_REC_BATCH_SIZE": 6,
-                    "LAYOUT_BATCH_SIZE": 6,
-                    "OCR_ERROR_BATCH_SIZE": 6,
-                    "DETECTOR_POSTPROCESSING_CPU_WORKERS": 4,
-                    "CHUNK_SIZE": 6,
-                }
-            else:
-                kwargs["device_requests"] = [
-                    docker.types.DeviceRequest(
-                        device_ids=[str(gpu_idx)], capabilities=[["gpu"]]
-                    )
-                ]
-
-            self.container = self.client.containers.run(self.image_name, **kwargs)
-
-            print(f"✓ Container started with ID: {self.container.id}")
-
-            # Wait for container to be ready
-            return self._wait_for_health_check(port)
-
-        except Exception as e:
-            print(f"✗ Failed to start container: {e}")
-            return False
-
-    def _wait_for_health_check(self, port: int, timeout: int = 60) -> bool:
-        """Wait for the container to be ready by checking health endpoint."""
-        print("Waiting for container to be ready...")
-        start_time = time.time()
-
-        while time.time() - start_time < timeout:
-            try:
-                import requests
-
-                response = requests.get(
-                    f"http://localhost:{port}/health_check", timeout=5
-                )
-                if response.status_code == 200:
-                    print("✓ Container is ready")
-                    return True
-            except requests.exceptions.RequestException:
-                pass
-
-            time.sleep(2)
-
-        print("✗ Container failed to become ready within timeout")
-        return False
-
-    def stop_container(self):
-        """Stop and remove the Docker container."""
-        if self.container:
-            print(f"Stopping container: {self.container_name}")
-            try:
-                self.container.stop()
-                self.container.remove()
-                print("✓ Container stopped and removed")
-            except Exception as e:
-                print(f"Warning: Error stopping container: {e}")
 
 
 class ResourceMonitor:
@@ -413,7 +299,7 @@ class PerformanceTester:
         base_url: str = "http://localhost:8000",
         max_concurrent: int = 10,
         max_files: int | None = None,
-        format_lines: bool = False,
+        force_ocr: bool = False,
         out_dir: str = "",
     ):
         self.pdf_dir = Path(pdf_dir)
@@ -422,7 +308,7 @@ class PerformanceTester:
         self.results: List[Dict] = []
         self.results_lock = threading.Lock()
         self.max_files = max_files
-        self.config = {"format_lines": format_lines, "paginate_output": True}
+        self.config = {"force_ocr": force_ocr, "paginate_output": True}
         self.out_dir = out_dir
 
     def find_pdf_files(self) -> List[Path]:
@@ -702,7 +588,7 @@ class PerformanceTester:
     "--max_files", type=int, default=None, help="Maximum number of PDF files to process"
 )
 @click.option(
-    "--format_lines", is_flag=True, help="Format lines in the output (default: False)"
+    "--force_ocr", is_flag=True, help="Force OCR in the output (default: False)"
 )
 @click.option("--out_dir", type=str, default=None, help="Output directory for results")
 @click.option("--gpu_idx", type=int, default=0, help="GPU index to use (if applicable)")
@@ -723,7 +609,7 @@ def main(
     build: bool,
     max_concurrent: int,
     max_files: int,
-    format_lines: bool,
+    force_ocr: bool,
     out_dir: str,
     gpu_idx: int,
     image_name: str,
@@ -767,7 +653,7 @@ def main(
             f"http://localhost:{port}",
             max_concurrent,
             max_files,
-            format_lines,
+            force_ocr,
             out_dir,
         )
         start_time = time.time()
